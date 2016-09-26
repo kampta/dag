@@ -1,3 +1,5 @@
+import json
+import traceback
 from copy import copy, deepcopy
 
 class DAGValidationError(Exception):
@@ -10,121 +12,107 @@ class DAG(object):
         """ Construct a new DAG with no nodes or edges. """
         self.graph = {}
 
-    def add_node(self, node_name, graph=None):
+    def add_node(self, node_name):
         """ Add a node if it does not exist yet, or error out. """
-        if not graph:
-            graph = self.graph
-        
-        graph[node_name] = set()
 
-    def add_node_if_not_exists(self, node_name, graph=None):
+        if node_name in self.graph:
+            raise ValueError("node %s already exists" % node_name)
+
+        self.graph[node_name] = set()
+
+    def add_node_if_not_exists(self, node_name):
         try:
-            self.add_node(node_name, graph=graph)
-        except KeyError:
+            self.add_node(node_name)
+        except ValueError:
             pass
 
-    def delete_node(self, node_name, graph=None):
+    def delete_node(self, node_name):
         """ Deletes this node and all edges referencing it. """
-        if not graph:
-            graph = self.graph
+
         if node_name not in graph:
             raise KeyError('node %s does not exist' % node_name)
-        graph.pop(node_name)
 
-        for node, edges in graph.items():
+        self.graph.pop(node_name)
+
+        for node, edges in self.graph.items():
             if node_name in edges:
                 edges.remove(node_name)
 
-    def delete_node_if_exists(self, node_name, graph=None):
+    def delete_node_if_exists(self, node_name):
         try:
-            self.delete_node(node_name, graph=graph)
+            self.delete_node(node_name)
         except KeyError:
             pass
 
-    def add_edge(self, ind_node, dep_node, graph=None):
+    def add_edge(self, ind_node, dep_node):
         """ Add an edge (dependency) between the specified nodes. """
-        if not graph:
-            graph = self.graph
-        if ind_node not in graph or dep_node not in graph:
-            raise KeyError('one or more nodes do not exist in graph')
-        test_graph = deepcopy(graph)
-        test_graph[ind_node].add(dep_node)
-        is_valid, message = self.validate(test_graph)
-        if is_valid:
-            graph[ind_node].add(dep_node)
-        else:
-            raise DAGValidationError()
+        try:
+            if ind_node not in self.graph or dep_node not in self.graph:
+                raise KeyError('one or more nodes do not exist in graph')
+
+            if dep_node in self.graph[ind_node]:
+                return
+
+            self.graph[ind_node].add(dep_node)
+            is_valid, message = self.validate()
+
+            if not is_valid:
+                self.graph[ind_node].remove(dep_node)
+                print(message)
+
+        except DAGValidationError:
+            self.graph[ind_node].remove(dep_node)
+            print(traceback.print_exc())
 
 
-    def delete_edge(self, ind_node, dep_node, graph=None):
+    def delete_edge(self, ind_node, dep_node):
         """ Delete an edge from the graph. """
-        if not graph:
-            graph = self.graph
-        if dep_node not in graph.get(ind_node, []):
+
+        if dep_node not in self.graph.get(ind_node, []):
             raise KeyError('this edge does not exist in graph')
-        graph[ind_node].remove(dep_node)
+
+        self.graph[ind_node].remove(dep_node)
 
 
-    def rename_edges(self, old_task_name, new_task_name, graph=None):
-        """ Change references to a task in existing edges. """
-        if not graph:
-            graph = self.graph
-        for node, edges in graph.items():
-
-            if node == old_task_name:
-                graph[new_task_name] = copy(edges)
-                del graph[old_task_name]
-
-            else:
-                if old_task_name in edges:
-                    edges.remove(old_task_name)
-                    edges.add(new_task_name)
-
-
-    def predecessors(self, node, graph=None):
+    def predecessors(self, node):
         """ Returns a list of all predecessors of the given node """
-        if graph is None:
-            graph = self.graph
-        return [key for key in graph if node in graph[key]]
+        
+        return [key for key in self.graph if node in self.graph[key]]
 
 
-    def downstream(self, node, graph=None):
+    def downstream(self, node):
         """ Returns a list of all nodes this node has edges towards. """
-        if graph is None:
-            graph = self.graph
-        if node not in graph:
+        
+        if node not in self.graph:
             raise KeyError('node %s is not in graph' % node)
-        return list(graph[node])
+        return list(self.graph[node])
 
-    def all_downstreams(self, node, graph=None):
+    def all_downstreams(self, node):
         """Returns a list of all nodes ultimately downstream
         of the given node in the dependency graph, in
         topological order."""
-        if graph is None:
-            graph = self.graph
+        
         nodes = [node]
         nodes_seen = set()
         i = 0
         while i < len(nodes):
-            downstreams = self.downstream(nodes[i], graph)
+            downstreams = self.downstream(nodes[i])
             for downstream_node in downstreams:
                 if downstream_node not in nodes_seen:
                     nodes_seen.add(downstream_node)
                     nodes.append(downstream_node)
             i += 1
-        return filter(lambda node: node in nodes_seen, self.topological_sort(graph=graph))
+        return filter(lambda node: node in nodes_seen, self.topological_sort())
 
-    def root(self, graph=None):
+    def root(self):
         """ Return a list of all leaves (nodes with no downstreams) """
-        if graph is None:
-            graph=self.graph
-        return [key for key in graph if not graph[key]]
+        
+        return [key for key in self.graph if not self.graph[key]]
 
-    def all_leaves(self, graph=None):
+    def all_leaves(self):
         """ Return a list of all leaves (nodes with no downstreams) """
-        if graph is None:
-            graph=self.graph
-        return [key for key in graph if not graph[key]]
+        
+        return [key for key in self.graph if not self.graph[key]]
 
     def from_dict(self, graph_dict):
         """ Reset the graph and build it from the passed dictionary.
@@ -143,29 +131,62 @@ class DAG(object):
             for dep_node in dep_nodes:
                 self.add_edge(ind_node, dep_node)
 
+    def from_json(self, js, start=None):
+        """ Reset the graph and build it from the passed json.
+        The leaves of json are empty dict, for example
+        {
+            "A": {
+                "A_1" : {},
+                "A_2" : {
+                    "A_2_1": {},
+                    "A_2_2": {}
+                }
+            }
+        }
+        """
+
+        self.reset_graph()
+
+        if start is not None:
+            start_nodes = [start]
+        else:
+            start_nodes = [key for key in js]
+
+        for start_node in start_nodes:
+            for parent, child in self.json2edges(start_node, js[start_node]):
+                self.add_node_if_not_exists(parent)
+                self.add_node_if_not_exists(child)
+                self.add_edge(parent, child)
+
+    def json2edges(self, parent, children):
+        iters = [(parent, children)]
+        
+        while iters:
+            parent, children = iters.pop()
+            for k, v in children.items():
+                if isinstance(v, dict) and len(v)>0:
+                    iters.append((k, v))
+                yield (parent, k)
 
     def reset_graph(self):
         """ Restore the graph to an empty state. """
         self.graph = {}
 
 
-    def ind_nodes(self, graph=None):
+    def ind_nodes(self):
         """ Returns a list of all nodes in the graph with no dependencies. """
-        if graph is None:
-            graph=self.graph
-        all_nodes, dependent_nodes = set(graph.keys()), set()
-        for downstream_nodes in graph.values():
+        
+        all_nodes, dependent_nodes = set(self.graph.keys()), set()
+        for downstream_nodes in self.graph.values():
             [dependent_nodes.add(node) for node in downstream_nodes]
         return list(all_nodes - dependent_nodes)
 
 
-    def all_paths(self, start=None, graph=None):
+    def all_paths(self, start=None):
         paths = []
-        if graph is None:
-            graph = self.graph
-
+        
         if start is None:
-            start_nodes = self.ind_nodes(graph)
+            start_nodes = self.ind_nodes()
         else:
             start_nodes = [start]
 
@@ -175,20 +196,21 @@ class DAG(object):
             stack = [(start, [start])]
             while stack:
                 (vertex, path) = stack.pop()
-                for next in graph[vertex] - set(path):
+                for next in self.graph[vertex] - set(path):
                     if next in all_leaves:
                         paths.append(path + [next])
                     else:
                         stack.append((next, path + [next]))
         return paths
 
-    def validate(self, graph=None):
+    def validate(self):
         """ Returns (Boolean, message) of whether DAG is valid. """
-        graph = graph if graph is not None else self.graph
-        if len(self.ind_nodes(graph)) == 0:
+
+        if len(self.ind_nodes()) == 0:
             return (False, 'no independent nodes detected')
         try:
-            self.topological_sort(graph)
+            self.topological_sort()
+
         except ValueError:
             return (False, 'failed topological sort')
         return (True, 'valid')
@@ -205,13 +227,15 @@ class DAG(object):
         return list(result)
 
 
-    def topological_sort(self, graph=None):
+    def topological_sort(self):
         """ Returns a topological ordering of the DAG.
         Raises an error if this is not possible (graph is not valid).
         """
-        graph = deepcopy(graph if graph is not None else self.graph)
+        
+        graph = deepcopy(self.graph)
+
         l = []
-        q = deepcopy(self.ind_nodes(graph))
+        q = deepcopy(self.ind_nodes())
         while len(q) != 0:
             n = q.pop(0)
             l.append(n)
