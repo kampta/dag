@@ -11,6 +11,8 @@ class DAG(object):
     def __init__(self):
         """ Construct a new DAG with no nodes or edges. """
         self.graph = {}
+        self.levels = {}
+        self.max_level = -1
 
     def add_node(self, node_name):
         """ Add a node if it does not exist yet, or error out. """
@@ -73,12 +75,29 @@ class DAG(object):
 
         self.graph[ind_node].remove(dep_node)
 
-
     def predecessors(self, node):
         """ Returns a list of all predecessors of the given node """
         
         return [key for key in self.graph if node in self.graph[key]]
 
+    def upstream(self, node):
+        """ Returns path from root to node
+        """
+        if node not in self.graph:
+            return []
+            
+        depth = self.depth(node)
+        path = [node]
+        while depth > -1:
+            depth -= 1
+            possible_parents = self.get_nodes_at_depth(depth)
+
+            for possible_parent in possible_parents:
+                if path[-1] in self.graph[possible_parent]:
+                    path.append(possible_parent)
+                    continue
+
+        return path
 
     def downstream(self, node):
         """ Returns a list of all nodes this node has edges towards. """
@@ -131,6 +150,8 @@ class DAG(object):
             for dep_node in dep_nodes:
                 self.add_edge(ind_node, dep_node)
 
+        self.build_levels()
+
     def from_json(self, js, start=None):
         """ Reset the graph and build it from the passed json.
         The leaves of json are empty dict, for example
@@ -157,6 +178,8 @@ class DAG(object):
                 self.add_node_if_not_exists(parent)
                 self.add_node_if_not_exists(child)
                 self.add_edge(parent, child)
+
+        self.build_levels()
 
     def json2edges(self, parent, children):
         iters = [(parent, children)]
@@ -248,3 +271,40 @@ class DAG(object):
         if len(l) != len(graph.keys()):
             raise ValueError('graph is not acyclic')
         return l
+
+    def build_levels(self):
+        """ Builds a dictionary with depth of each node
+        """
+
+        self.levels = {}
+        batch = set(self.ind_nodes())
+        if len(batch) == 0:
+            raise ValueError("graph doesn't have a root")
+
+        level = 0
+        next_batch = set([])
+        while batch:
+            node = batch.pop()
+            if node not in self.levels:
+                self.levels[node] = level
+                for child in self.graph[node]:
+                    if child not in self.levels:
+                        next_batch.add(child)
+
+            if len(batch) == 0:
+                batch.update(next_batch)
+                next_batch = set([])
+                level+=1
+
+        self.max_level = max(self.levels.values())
+
+    def get_nodes_at_depth(self, level):
+        """ Returns depth of node
+        """
+
+        return [key for key, val in self.levels.items() if val==level]
+
+    def depth(self, node):
+        """ Returns depth of node
+        """
+        return self.levels[node]
